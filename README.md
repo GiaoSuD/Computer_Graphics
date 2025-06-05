@@ -38,6 +38,7 @@ Game 3D kinh dị sinh tồn lấy cảm hứng từ Backrooms, phát triển b�
 - **F**: Bật/tắt đèn pin
 - **X**: Spectator mode
 - **E**: Tương tác cửa
+- **M**: Bật mini-map
 
 ### 6. Asset & Model
 - **Player Model**: ETB Animated (Sketchfab)
