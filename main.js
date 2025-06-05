@@ -238,10 +238,18 @@ graphicSettings.add(guicontrols, "dynamiclights").onChange((value) => {
         createLightSources(offsetX, offsetZ);
         ceilingMaterial.color.setHex(0x333333);
         ambientLight.intensity = 0.1;
+        // Show glowstick lights
+        glowstickLights.forEach(light => {
+            if(light) light.visible = true;
+        });
     } else {
         deleteLights();
         ceilingMaterial.color.setHex(0x777777);
         ambientLight.intensity = 0.7;
+        // Hide glowstick lights
+        glowstickLights.forEach(light => {
+            if(light) light.visible = false;
+        });
     }
 }).name("Dynamic Lights").listen();
 
@@ -1514,24 +1522,45 @@ for (let y = 0; y < MAP_HEIGHT; y++) {
         glowstick.userData.animator = animator;
         glowstick.userData.cellValue = cellValue;
         glowstickAnimators.push(animator);
-        // Đặt màu cho glowstick
+        
+        // Tăng cường phát sáng cho glowstick
         glowstick.traverse((child) => {
-          if (child.isMesh && child.material && child.material.color) {
+          if (child.isMesh && child.material) {
             child.material.color.set(glowstickColors[cellValue]);
-            child.material.needsUpdate = true;
             child.material.emissive = new THREE.Color(glowstickColors[cellValue]);
-            child.material.emissiveIntensity = 0.5;
+            child.material.emissiveIntensity = 3.0; // Tăng độ phát sáng
+            child.material.needsUpdate = true;
           }
         });
-        // Thêm hiệu ứng glow bằng PointLight
-        const glowLight = new THREE.PointLight(glowstickColors[cellValue], 1.2, 4, 2);
-        glowLight.position.copy(glowstick.position);
-        glowLight.position.y += 0.1;
-        glowLight.userData.isGlowstickLight = true;
-        glowLight.userData.glowstickId = `${x},${y}`;
-        scene.add(glowLight);
-        glowstick.userData.glowLight = glowLight;
-        glowstickLights.push(glowLight);
+
+        // Điều chỉnh ánh sáng glowstick
+        const innerLight = new THREE.PointLight(
+          glowstickColors[cellValue],
+          5.0,  // Tăng cường độ lên 5.0
+          4,    // Tăng phạm vi lên 4
+          1.5   // Giảm độ suy giảm xuống 1.5
+        );
+        innerLight.position.copy(glowstick.position);
+        innerLight.position.y += 0.2; // Nâng cao hơn một chút
+
+        const outerLight = new THREE.PointLight(
+          glowstickColors[cellValue],
+          2.0,  // Tăng cường độ lên 2.0
+          8,    // Tăng phạm vi lên 8
+          1.5   // Giảm độ suy giảm
+        );
+        outerLight.position.copy(glowstick.position);
+        outerLight.position.y += 0.2;
+
+        // Thêm bloom effect cho glowstick
+        // Tìm và điều chỉnh bloomPass settings
+        bloomPass.strength = 1.0;
+        bloomPass.radius = 0.5;
+        bloomPass.threshold = 0.3;
+        bloomPass.enabled = true;
+
+        // Điều chỉnh ambient light để tối hơn (làm nổi bật glowstick)
+        ambientLight.intensity = 0.05;
       });
     }
   }
@@ -1542,16 +1571,21 @@ function checkGlowstickCollision() {
   const playerPosition = controls.getObject().position;
   scene.children.forEach(function (object) {
     if (object.userData && object.userData.isGlowstick) {
-      // Tính khoảng cách 2D (bỏ qua Y)
       const dx = playerPosition.x - object.position.x;
       const dz = playerPosition.z - object.position.z;
       const dist2D = Math.sqrt(dx * dx + dz * dz);
-      if (dist2D < 0.5) { // Khoảng cách chạm
-        // Xoá glowstick
+      if (dist2D < 0.5) {
         scene.remove(object);
-        // Xoá light glowstick
+        // Xóa cả hai nguồn sáng
         if (object.userData.glowLight) {
           scene.remove(object.userData.glowLight);
+          const lightIndex = glowstickLights.indexOf(object.userData.glowLight);
+          if (lightIndex > -1) glowstickLights.splice(lightIndex, 1);
+        }
+        if (object.userData.ambientGlow) {
+          scene.remove(object.userData.ambientGlow);
+          const glowIndex = glowstickLights.indexOf(object.userData.ambientGlow);
+          if (glowIndex > -1) glowstickLights.splice(glowIndex, 1);
         }
         glowstickCount++;
         updateGlowstickCounter();
@@ -1602,3 +1636,104 @@ function handleGameWin() {
     // Thêm âm thanh chiến thắng (nếu có)
     // TODO: Thêm âm thanh chiến thắng
 }
+
+// Thêm vào phần đầu file, sau các import
+const minimapSize = 200; // Kích thước minimap px
+const minimapScale = 4; // Tỷ lệ thu nhỏ map
+
+// Tạo element cho minimap
+const minimapContainer = document.createElement('div');
+minimapContainer.id = 'minimap';
+minimapContainer.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px; 
+    width: ${minimapSize}px;
+    height: ${minimapSize}px;
+    background: rgba(0,0,0,0.8);
+    border: 2px solid #444;
+    display: none;
+    z-index: 1000;
+`;
+
+// Tạo canvas cho minimap
+const minimapCanvas = document.createElement('canvas');
+minimapCanvas.width = minimapSize;
+minimapCanvas.height = minimapSize;
+minimapContainer.appendChild(minimapCanvas);
+document.body.appendChild(minimapContainer);
+
+// Hàm vẽ minimap
+function drawMinimap() {
+    const ctx = minimapCanvas.getContext('2d');
+    ctx.clearRect(0, 0, minimapSize, minimapSize);
+    
+    const cellSize = minimapSize / (MAP_WIDTH / minimapScale);
+    
+    // Vẽ các ô trong map
+    for (let y = 0; y < MAP_HEIGHT; y++) {
+        for (let x = 0; x < MAP_WIDTH; x++) {
+            const cellValue = getCellValue(x, y);
+            const mapX = (x * cellSize) / minimapScale;
+            const mapY = (y * cellSize) / minimapScale;
+            
+            // Chọn màu dựa vào loại ô
+            switch(cellValue) {
+                case 1: // Tường
+                    ctx.fillStyle = '#666';
+                    break;
+                case 2: case 22: // Cửa
+                    ctx.fillStyle = '#844'; 
+                    break;
+                case 4: // Glowstick xanh lá
+                    ctx.fillStyle = '#0f0';
+                    break;
+                case 5: // Glowstick xanh dương
+                    ctx.fillStyle = '#06f';
+                    break;
+                case 6: // Glowstick đỏ
+                    ctx.fillStyle = '#f00';
+                    break;
+                case 7: // Glowstick vàng
+                    ctx.fillStyle = '#ff0';
+                    break;
+                case 9: // Cửa thoát
+                    ctx.fillStyle = '#0ff';
+                    break;
+                default: // Không gian trống
+                    ctx.fillStyle = '#111';
+            }
+            
+            ctx.fillRect(mapX, mapY, cellSize/minimapScale, cellSize/minimapScale);
+        }
+    }
+    
+    // Vẽ vị trí người chơi
+    const playerX = ((controls.getObject().position.x + MAP_WIDTH/2) * cellSize) / minimapScale;
+    const playerY = ((controls.getObject().position.z + MAP_HEIGHT/2) * cellSize) / minimapScale;
+    
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(playerX, playerY, 2, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// Thêm vào event listener keydown
+document.addEventListener('keydown', function(event) {
+    if (event.code === 'KeyM') {
+        if (minimapContainer.style.display === 'none') {
+            minimapContainer.style.display = 'block';
+            // Cập nhật minimap liên tục khi hiển thị
+            if (!window.minimapInterval) {
+                window.minimapInterval = setInterval(drawMinimap, 100);
+            }
+        } else {
+            minimapContainer.style.display = 'none';
+            // Dừng cập nhật khi ẩn
+            if (window.minimapInterval) {
+                clearInterval(window.minimapInterval);
+                window.minimapInterval = null;
+            }
+        }
+    }
+});
