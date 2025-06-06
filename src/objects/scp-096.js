@@ -5,11 +5,9 @@ import { GLTFLoader } from 'https://cdn.skypack.dev/three@0.149.0/examples/jsm/l
 export const SCP096_ANIMATION_STATES = {
   IDLE1: 'idle1',
   IDLE2: 'idle2',
-  CHARGE: 'charge',
+  WALK: 'walk',
   SCREAM: 'scream',
   RUN: 'run',
-  WALK: 'walk',
-  ATTACK1: 'attack1',
   ATTACK2: 'attack2'
 };
 
@@ -19,6 +17,7 @@ export class SCP096Animator {
     this.actions = {};
     this.currentAction = null;
     this.currentState = SCP096_ANIMATION_STATES.IDLE1;
+    this.isAnimationComplete = true;
     this.setupAnimations(animations);
     this.playAnimation(SCP096_ANIMATION_STATES.IDLE1);
   }
@@ -26,49 +25,80 @@ export class SCP096Animator {
   setupAnimations(animations) {
     animations.forEach((clip) => {
       const action = this.mixer.clipAction(clip);
-      if (clip.name.includes('C.096_ACalm.F')) {
+      if (clip.name === 'C.096_ACalm.F') {
         this.actions[SCP096_ANIMATION_STATES.IDLE1] = action;
-      } else if (clip.name.includes('C.096_AIdle.F')) {
+      } else if (clip.name === 'C.096_AIdle.F') {
         this.actions[SCP096_ANIMATION_STATES.IDLE2] = action;
-      } else if (clip.name.includes('C.096_AChrge.F')) {
-        this.actions[SCP096_ANIMATION_STATES.CHARGE] = action;
-      } else if (clip.name.includes('C.096_Dstd.F')) {
-        this.actions[SCP096_ANIMATION_STATES.SCREAM] = action;
-      } else if (clip.name.includes('C.096_ARun.F - Forward')) {
-        this.actions[SCP096_ANIMATION_STATES.RUN] = action;
-      } else if (clip.name.includes('C.096_AWlk.F - Forward')) {
+      } else if (clip.name === 'C.096_DWlk.F - Forward') {
         this.actions[SCP096_ANIMATION_STATES.WALK] = action;
-      } else if (clip.name.includes('C.096_Aswp1.F')) {
-        this.actions[SCP096_ANIMATION_STATES.ATTACK1] = action;
-      } else if (clip.name.includes('C.096_AGrpl.F')) {
+      } else if (clip.name === 'C.096_Dstd.F') {
+        this.actions[SCP096_ANIMATION_STATES.SCREAM] = action;
+      } else if (clip.name === 'C.096_ARun.F - Forward') {
+        this.actions[SCP096_ANIMATION_STATES.RUN] = action;
+      } else if (clip.name === 'C.096_ASwp2.F') {
         this.actions[SCP096_ANIMATION_STATES.ATTACK2] = action;
       }
     });
-    console.log('SCP-096 available animations:', Object.keys(this.actions));
   }
 
-  playAnimation(stateName, crossfadeDuration = 0.2) {
-    const newAction = this.actions[stateName];
-    if (!newAction) {
-      console.warn(`SCP-096 animation '${stateName}' not found`);
-      return;
+  playAnimation(state) {
+    const action = this.actions[state];
+    if (!action) {
+        return;
     }
-    if (this.currentState === stateName) return;
-    if (this.currentAction && this.currentAction !== newAction) {
-      this.currentAction.fadeOut(crossfadeDuration);
+    if (this.currentAction === action) {
+        return;
     }
-    newAction.reset();
-    newAction.fadeIn(crossfadeDuration);
-    newAction.play();
-    this.currentAction = newAction;
-    this.currentState = stateName;
-    console.log('SCP-096 switched animation to:', stateName);
+    
+    // Dừng animation hiện tại nếu có
+    if (this.currentAction) {
+        this.currentAction.fadeOut(0.2);
+    }
+    
+    // Reset và phát animation mới
+    action.reset();
+    action.setEffectiveTimeScale(1);
+    action.setEffectiveWeight(1);
+    action.fadeIn(0.2);
+    action.play();
+    
+    // Chỉ lặp lại cho các animation không phải idle và scream
+    if (state !== SCP096_ANIMATION_STATES.IDLE1 && 
+        state !== SCP096_ANIMATION_STATES.IDLE2 && 
+        state !== SCP096_ANIMATION_STATES.SCREAM) {
+        action.setLoop(THREE.LoopRepeat);
+        this.isAnimationComplete = true; // Luôn true cho run, walk, attack
+    } else {
+        action.setLoop(THREE.LoopOnce);
+        action.clampWhenFinished = true;
+        this.isAnimationComplete = false;
+    }
+    
+    this.currentAction = action;
+    this.currentState = state;
+    //console.log('SCP-096: Switched animation to:', state);
   }
 
   update(deltaTime) {
     if (this.mixer) {
       this.mixer.update(deltaTime);
+      
+      // Chỉ kiểm tra completion cho idle và scream
+      if (this.currentAction && !this.isAnimationComplete && 
+          (this.currentState === SCP096_ANIMATION_STATES.IDLE1 || 
+           this.currentState === SCP096_ANIMATION_STATES.IDLE2 || 
+           this.currentState === SCP096_ANIMATION_STATES.SCREAM)) {
+        
+        // Kiểm tra xem animation đã hoàn thành chưa
+        if (this.currentAction.time >= this.currentAction.getClip().duration) {
+          this.isAnimationComplete = true;
+        }
+      }
     }
+  }
+
+  isCurrentAnimationComplete() {
+    return this.isAnimationComplete;
   }
 
   getCurrentState() {

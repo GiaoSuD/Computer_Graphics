@@ -23,6 +23,7 @@ export class EndingDoorAnimator {
   setupAnimations(animations) {
     animations.forEach((clip) => {
       const action = this.mixer.clipAction(clip);
+      //action.timeScale = 20;
       action.setDuration(this.animationDuration);
       
       const clipName = clip.name.toLowerCase();
@@ -84,14 +85,31 @@ export function loadEndingDoor(scene, position = { x: 0, y: 0, z: 0 }, onLoaded)
     door.scale.set(1, 1, 1);
     
     // Thiết lập vật liệu và bóng cho cửa
+    let mainMesh = null;
     door.traverse((child) => {
       if (child.isMesh) {
         child.castShadow = true;
         child.receiveShadow = true;
+        if (!mainMesh) mainMesh = child;
       }
     });
-    
+    // Nếu object cha không có geometry, gán geometry của mesh chính cho nó để va chạm
+    if (!door.geometry && mainMesh && mainMesh.geometry) {
+      door.geometry = mainMesh.geometry;
+    }
     scene.add(door);
+    
+    // Tạo collider invisible cho va chạm
+    const colliderGeometry = new THREE.BoxGeometry(1, 2, 0.2); // Điều chỉnh kích thước nếu cần
+    const colliderMaterial = new THREE.MeshBasicMaterial({ visible: false });
+    const collider = new THREE.Mesh(colliderGeometry, colliderMaterial);
+    collider.position.copy(door.position);
+    collider.position.y += 1; // Đặt collider ở giữa chiều cao cửa
+    collider.userData.isMapObject = true;
+    collider.userData.cellType = 'exitDoor';
+    collider.userData.animator = null; // Không cần animator cho collider
+    collider.identifier = '0,0,exitDoor';
+    scene.add(collider);
     
     // Thiết lập hoạt ảnh
     let mixer = null;
@@ -100,6 +118,8 @@ export function loadEndingDoor(scene, position = { x: 0, y: 0, z: 0 }, onLoaded)
     if (gltf.animations && gltf.animations.length > 0) {
       mixer = new THREE.AnimationMixer(door);
       animator = new EndingDoorAnimator(mixer, gltf.animations, door);
+      // Gán animator cho collider để logic mở cửa hoạt động
+      collider.userData.animator = animator;
     }
     
     if (onLoaded) onLoaded(door, mixer, animator);

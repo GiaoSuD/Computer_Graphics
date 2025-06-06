@@ -13,6 +13,7 @@ import { BadTVShader } from './shader/BadTVShader.js';
 import Stats from 'https://cdn.skypack.dev/stats.js';
 import { VignetteShader } from './shader/VignetteShader.js';
 import { UnrealBloomPass } from './shader/UnrealBloomPass.js';
+import audio from './src/audio.js';
 
 // Import player system
 import { loadPlayer, PlayerAnimator, ANIMATION_STATES } from './src/objects/Player.js';
@@ -28,6 +29,9 @@ import { loadGlowstick } from './src/objects/Glowstick.js';
 
 // Import ending door system
 import { loadEndingDoor } from './src/objects/EndingDoor.js';
+
+// Import SCP-096 system
+import { loadSCP096, SCP096_ANIMATION_STATES } from './src/objects/scp-096.js';
 
 //Sử dụng map cố định
 var mazeWidth = MAP_WIDTH;
@@ -190,24 +194,24 @@ const guicontrols = {
     fpscapped: true
 };
 const staticControls = {
-    enabled: true,
+    enabled: false,
     amount: 0.04,
     size: 4.0
 };
 const rgbControls = {
-    enabled: true,
+    enabled: false,
     amount: 0.001,
     angle: 0.0
 };
 const filmControls = {
-    enabled: true,
+    enabled: false,
     grayscale: false,
     nIntensity: 0.1,
     sIntensity: 0.8,
     sCount: 375
 };
 const vignetteControls = {
-    enabled: true,
+    enabled: false,
     offset: 0.81,
     darkness: 1.0
 };
@@ -461,6 +465,7 @@ startButton.addEventListener(
             controls.getObject().position.z = spawnPos.z;
             createFlashlight();
             notStarted = false;
+            audio.playRandomMusic(); // Phát nhạc nền random khi bắt đầu game
         }
         paused = false;
     },
@@ -471,6 +476,7 @@ controls.addEventListener('lock', function () {
     startButton.style.display = 'none'
     menuPanel.style.display = 'none'
     paused = false;
+    requestAnimationFrame(update);
 })
 
 controls.addEventListener('unlock', function () {
@@ -490,9 +496,11 @@ document.addEventListener(
         if (e.code === 'KeyF') {
             if (!paused){
                 if (flashlightEnabled) {
+                    audio.playSFX('flashlight');
                     deleteFlashlight();
                     flashlightEnabled = false;
                 } else {
+                    audio.playSFX('flashlight');
                     flashlightEnabled = true;
                     createFlashlight();
                 }
@@ -529,6 +537,8 @@ document.addEventListener(
             startButton.style.display = 'block'
             menuPanel.style.display = 'block'
             paused = true;
+            audio.setMusicVolume(0.1);
+            audio.setSFXVolume(0);
         }
     },
     false
@@ -864,7 +874,7 @@ function buildExitDoor() {
     for (let y = 0; y < MAP_HEIGHT; y++) {
         for (let x = 0; x < MAP_WIDTH; x++) {
             const cellValue = getCellValue(x, y);
-            if (cellValue === 9) { // Exit door
+            if (cellValue === 10) { // Exit door
                 const pos = {
                     x: x - MAP_WIDTH / 2,
                     y: 0,
@@ -981,6 +991,7 @@ const modelPosition = {
 
 // Thêm controls Model GUI
 const modelSettings = gui.addFolder("Model Position");
+modelSettings.closed = true;
 modelSettings.add(modelPosition, "x", -1, 1, 0.01).onChange((value) => {
     modelPosition.x = value;
 }).name("Model X Offset").listen();
@@ -1005,6 +1016,26 @@ graphicSettings.add({ brightness }, 'brightness', 0.1, 2.0, 0.01).onChange((valu
     renderer.setClearColor(fogColor);
 }).name("Brightness").listen();
 ambientLight.intensity = brightness;
+
+//Thêm volume SFX và Music vào folder gameplay settings
+const soundControls = {
+    sfxVolume: 0.7,
+    musicVolume: 0.3
+};
+
+gameplaySettings.add(soundControls, 'sfxVolume', 0, 1, 0.01)
+    .onChange((value) => {
+        audio.setSFXVolume(value);
+    })
+    .name("SFX Volume")
+    .listen();
+
+gameplaySettings.add(soundControls, 'musicVolume', 0, 1, 0.01)
+    .onChange((value) => {
+        audio.setMusicVolume(value);
+    })
+    .name("Music Volume")
+    .listen();
 
 // Thêm offset cho model khi crouch
 const modelCrouchYOffset = 0.15;
@@ -1032,9 +1063,6 @@ function showNextMessage() {
         // ẩn thông báo hiện tại
         popup.classList.remove("show");
         popup.classList.add("hide");
-        // var nextMessage = messageQueue.shift();
-        // showMessage(nextMessage);
-        // chờ 1 giây cho chuyển tiếp
         setTimeout(function () {
             var nextMessage = messageQueue.shift();
             showMessage(nextMessage);
@@ -1071,217 +1099,146 @@ scene.traverse(obj => {
 
 // Cập nhật hàm
 function update() {
-    var currentTime = performance.now();
-    var deltaTime = currentTime - lastTime;
+    // 1. YÊU CẦU FRAME TIẾP THEO ngay từ đầu
+    requestAnimationFrame(update);
+    
+    // 2. TÍNH TOÁN DELTA TIME một lần duy nhất
     const delta = clock.getDelta();
-    // Giới hạn tốc độ khung hình để tránh lỗi vật lý
-    if (deltaTime > 1000 / maxFPS || !fpsCapped) {
+    
+    if (!paused) {
         stats.begin();
-
-        // Theo dõi trạng thái chuyển động cho các hoạt ảnh
-        let wasMoving = isMoving;
-        isMoving = false;
-        isRunning = false;
-        isMovingBackward = false;
-        isCrouching = keyState.KeyC; 
-
-        let speed = playerSettings.baseSpeed;
-        let runMultiplier = 3; // hệ số chạy
-        if (keyState.ShiftLeft && !isCrouching) speed *= runMultiplier;
-        if (spectatorMode) speed *= 5; // Spectator nhanh hơn
-        let crouchModifier = isCrouching ? 0.5 : 1.0;
-        speed *= crouchModifier;
-        // Reset velocity mỗi frame
-        velocity.x = 0;
-        velocity.y = 0;
-        velocity.z = 0;
-        if (keyState.KeyW) velocity.z = speed;
-        if (keyState.KeyA) velocity.x = -speed;
-        if (keyState.KeyS) velocity.z = -speed;
-        if (keyState.KeyD) velocity.x = speed;
-        // Cập nhật hoạt ảnh nhân vật dựa trên chuyển động
-        if (typeof playerAnimator !== 'undefined' && playerAnimator) {
-            const isMoving = keyState.KeyW || keyState.KeyA || keyState.KeyS || keyState.KeyD;
-            const isRunning = keyState.ShiftLeft && !isCrouching;
-            const isMovingBackward = keyState.KeyS;
-            playerAnimator.updateMovementAnimation(isMoving, isRunning, isCrouching, isMovingBackward);
-            // Gọi update cho animator mỗi frame
-            playerAnimator.update(delta);
-        }
-
-        // Tốc độ chuyển động
-        velocity.multiplyScalar(damping);
         
-        // Cập nhật vị trí
-        var oldPosition = controls.getObject().position.clone();
-
-        controls.moveForward(velocity.z);
-        controls.moveRight(velocity.x);
-        if (spectatorMode) controls.moveUp(velocity.y);
-
-        // Đồng bộ hóa vị trí và xoay model nhân vật với camera
-        if (playerModel) {
-            // Tính toán vị trí mới của model dựa trên vị trí camera và offset
-            const cameraPosition = controls.getObject().position;
-            const cameraDirection = new THREE.Vector3(0, 0, -1);
-            cameraDirection.applyQuaternion(controls.getObject().quaternion);
-            
-            // Tính toán vị trí phía sau camera
-            const behindCamera = new THREE.Vector3();
-            behindCamera.copy(cameraPosition).add(cameraDirection.multiplyScalar(modelPosition.z));
-            
-            // Áp dụng offset ngang
-            const rightVector = new THREE.Vector3(1, 0, 0);
-            rightVector.applyQuaternion(controls.getObject().quaternion);
-            behindCamera.add(rightVector.multiplyScalar(modelPosition.x));
-            
-            // Cập nhật vị trí model
-            playerModel.position.x = behindCamera.x;
-            playerModel.position.z = behindCamera.z;
-            // Nếu crouch thì nâng model lên một chút
-            playerModel.position.y = cameraPosition.y + modelPosition.y + (isCrouching ? modelCrouchYOffset : 0);
-            
-            // Xoay model theo hướng camera
-            const euler = new THREE.Euler();
-            euler.setFromQuaternion(controls.getObject().quaternion, 'YXZ');
-            playerModel.rotation.y = euler.y + modelPosition.rotationOffset;
-        }
-
-        if (flashlightEnabled && flashlight != undefined) { // đèn pin theo camera
-            flashlight.position.copy(controls.getObject().position);
-            flashlight.position.y -= 0.12;
-            // Sử dụng quaternion để xác định hướng bên phải camera
-            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(controls.getObject().quaternion);
-            flashlight.position.addScaledVector(right, 0.15);
-            var direction = new THREE.Vector3(0, 0, -1);
-            direction.applyQuaternion(controls.getObject().quaternion); 
-            var distance = 5;
-            var targetPosition = new THREE.Vector3();
-            targetPosition.copy(controls.getObject().position).add(direction.multiplyScalar(distance));
-            flashlight.target.position.copy(targetPosition);
-            flashlight.target.updateMatrixWorld();
-        }
-
-        // Kiểm tra va chạm với tường
-        if (!spectatorMode) {
-            checkWallCollisions(oldPosition);
-        }
-
-        const playerPosition = controls.getObject().position;
-        const { x: oldX, z: oldZ } = oldPosition;
-        const { x: playerX, z: playerZ } = playerPosition;
-
-        if (oldX !== playerX || oldZ !== playerZ) {
-            const calculateOffset = (position, halfMaze, mazeDimension) => {
-                return (position < 0 ? (position - halfMaze) : (position + halfMaze)) / mazeDimension | 0;
-            };        
-
-            const newOffsetX = calculateOffset(playerX, halfMazeWidth, mazeWidth);
-            const newOffsetZ = calculateOffset(playerZ, halfMazeHeight, mazeHeight);
-
-            const offsetPairs = [];
- 
-            for (let xOffset = -tolerance; xOffset <= tolerance; xOffset++) { 
-                const newX = Math.floor((playerX + xOffset + halfMazeWidth) / mazeWidth);
-
-                for (let zOffset = -tolerance; zOffset <= tolerance; zOffset++) {
-                    const newZ = Math.floor((playerZ + zOffset + halfMazeHeight) / mazeHeight);
-
-                    if (!offsetPairs.some(([x, z]) => x === newX && z === newZ)) {
-                        offsetPairs.push([newX, newZ]);
-                    }
-                }
+        try {
+            // 3. CẬP NHẬT ANIMATIONS
+            if (playerAnimator) {
+                playerAnimator.update(delta);
+            }
+            if (window.doorAnimators) {
+                window.doorAnimators.forEach(anim => anim.update(delta));
+            }
+            if (window.endingDoorAnimators) {
+                window.endingDoorAnimators.forEach(anim => anim.update(delta));
+            }
+            if (glowstickAnimators) {
+                glowstickAnimators.forEach(anim => anim && anim.update(delta));
+            }
+            if (scpAnimator) {
+                updateSCP096(delta);
             }
 
-            handleOffsetChange(newOffsetX, newOffsetZ, offsetPairs);
+            // 4. XỬ LÝ LOGIC GAME
+            isMoving = keyState.KeyW || keyState.KeyA || keyState.KeyS || keyState.KeyD;
+            isRunning = keyState.ShiftLeft && !isCrouching;
+            isMovingBackward = keyState.KeyS;
+            isCrouching = keyState.KeyC;
+
+            let speed = playerSettings.baseSpeed;
+            if (isRunning) speed *= 3;
+            if (spectatorMode) speed *= 7;
+            speed *= (isCrouching ? 0.5 : 1.0);
+
+            velocity.x = 0;
+            velocity.z = 0;
+            if (keyState.KeyW) velocity.z = speed;
+            if (keyState.KeyA) velocity.x = -speed;
+            if (keyState.KeyS) velocity.z = -speed;
+            if (keyState.KeyD) velocity.x = speed;
+
+            // Cập nhật animations và vị trí
+            if (playerAnimator) {
+                playerAnimator.updateMovementAnimation(isMoving, isRunning, isCrouching, isMovingBackward);
+            }
+
+            const oldPosition = controls.getObject().position.clone();
+            controls.moveForward(velocity.z);
+            controls.moveRight(velocity.x);
+            
+            if (!spectatorMode) {
+                checkWallCollisions(oldPosition);
+            }
+
+            // Cập nhật model và đèn pin
+            updateModelAndFlashlight();
+            
+            // Kiểm tra va chạm với glowsticks
+            checkGlowstickCollision();
+
+        } catch (error) {
+            console.error("Error in game loop:", error);
         }
-
-        shaderTime += 0.1;
-        staticPass.uniforms.time.value = (shaderTime / 10);
-        filmPass.uniforms.time.value = shaderTime;
-        BadTVShaderPass.uniforms.time.value = shaderTime;
-
-        composer.render();
-
-        lastTime = currentTime;
+        
         stats.end();
     }
 
-    // Điều chỉnh độ cao camera chỉ khi crouch, còn lại trả lại giá trị do GUI điều khiển
-    if (isCrouching) {
-        controls.getObject().position.y = 0.35; // crouchHeight mặc định
-    } else {
-        controls.getObject().position.y = cameraYFromGUI; // Trả lại giá trị do GUI điều khiển
+    // 5. LOGIC LUÔN CHẠY (KỂ CẢ KHI PAUSE)
+    updateCameraAndEffects(delta);
+    
+    // 6. RENDER
+    composer.render();
+}
+
+// Tách logic cập nhật model và đèn pin thành hàm riêng
+function updateModelAndFlashlight() {
+    if (playerModel) {
+        const cameraPosition = controls.getObject().position;
+        const cameraDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(controls.getObject().quaternion);
+        const behindCamera = new THREE.Vector3().copy(cameraPosition).add(cameraDirection.multiplyScalar(modelPosition.z));
+        const rightVector = new THREE.Vector3(1, 0, 0).applyQuaternion(controls.getObject().quaternion);
+        behindCamera.add(rightVector.multiplyScalar(modelPosition.x));
+        playerModel.position.set(
+            behindCamera.x, 
+            cameraPosition.y + modelPosition.y + (isCrouching ? modelCrouchYOffset : 0), 
+            behindCamera.z
+        );
+        const euler = new THREE.Euler().setFromQuaternion(controls.getObject().quaternion, 'YXZ');
+        playerModel.rotation.y = euler.y + modelPosition.rotationOffset;
     }
-    // Điều chỉnh FOV khi chạy
-    let targetFov = isRunning ? 85 : 70;
-    if (camera.fov !== targetFov) {
-        camera.fov = targetFov;
+
+    if (flashlightEnabled && flashlight) {
+        const camPos = controls.getObject().position;
+        flashlight.position.copy(camPos);
+        flashlight.position.y -= 0.12;
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(controls.getObject().quaternion);
+        flashlight.position.addScaledVector(right, 0.15);
+        const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(controls.getObject().quaternion);
+        flashlight.target.position.copy(camPos).add(direction);
+        flashlight.target.updateMatrixWorld();
+    }
+}
+
+// Tách logic cập nhật camera và hiệu ứng thành hàm riêng
+function updateCameraAndEffects(delta) {
+    // Camera height smoothing
+    let targetY = isCrouching ? 0.35 : cameraYFromGUI;
+    const currentY = controls.getObject().position.y;
+    if (Math.abs(currentY - targetY) > 0.01) {
+        controls.getObject().position.y = THREE.MathUtils.lerp(currentY, targetY, 0.2);
+    }
+    
+    // FOV smoothing
+    let targetFov = (isRunning && !isCrouching) ? 85 : 70;
+    if (Math.abs(camera.fov - targetFov) > 0.1) {
+        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 0.1);
         camera.updateProjectionMatrix();
     }
 
-    //Điều chỉnh modelPosition.z khi chạy
-    if (isRunning) {
-        modelPosition.z = -0.48;
-    }    
-
-    if (currentTime > 1000 && !performanceOverride) {
-        lightsEnabled = false;
-            guicontrols.dynamiclights = false;
-            deleteLights();
-            ceilingMaterial.color.setHex(0x777777);
-            ambientLight.intensity = 0.7;
-            popupMessage("Dynamic lights have been automatically disabled. \n Press \"2\" or \"G\" to re-enable them.")
-            dynamicLightsPopup = true;
-        performanceOverride = true;
-    }
-
-    if ( mixer !== undefined ) {
-        mixer.update( delta );
-    }
-
-    // Animate đồ vật thu thập (hiệu ứng nổi)
+    // Collectible items animation
     scene.children.forEach(function(object) {
-        if (object.userData && object.userData.isCollectible) {
-            if (!object.userData.animationTime) {
-                object.userData.animationTime = 0;
-                object.userData.originalY = object.position.y;
-            }
-            object.userData.animationTime += delta * 2;
-            object.position.y = object.userData.originalY + Math.sin(object.userData.animationTime) * 0.1;
-            object.rotation.y += delta * 1.5; // Slow rotation
+        if (object.userData?.isCollectible) {
+            object.userData.animationTime = (object.userData.animationTime || 0) + delta * 2;
+            object.position.y = (object.userData.originalY || object.position.y) + 
+                Math.sin(object.userData.animationTime) * 0.1;
+            object.rotation.y += delta * 1.5;
         }
     });
 
-    // Cập nhật animators cho cửa
-    if (window.doorAnimators) {
-        window.doorAnimators.forEach(anim => anim.update(delta));
-    }
+    // Shader time update
+    shaderTime += delta;
+    if (staticPass.enabled) staticPass.uniforms.time.value = shaderTime / 10;
+    if (filmPass.enabled) filmPass.uniforms.time.value = shaderTime;
+    if (BadTVShaderPass.enabled) BadTVShaderPass.uniforms.time.value = shaderTime;
 
-    // Cập nhật animators cho cửa ending
-    if (window.endingDoorAnimators) {
-        window.endingDoorAnimators.forEach(anim => anim.update(delta));
-    }
-
-    // Kiểm tra chiến thắng khi đi qua cửa ending
-    if (!paused) {
-        scene.children.forEach((object) => {
-            if (object.userData?.cellType === 'exitDoor' && object.userData.animator?.isOpen()) {
-                const playerPos = controls.getObject().position;
-                const doorPos = object.position;
-                const distance = Math.sqrt(
-                    Math.pow(playerPos.x - doorPos.x, 2) +
-                    Math.pow(playerPos.z - doorPos.z, 2)
-                );
-                
-                if (distance < 1.0) {
-                    handleGameWin();
-                }
-            }
-        });
-    }
-
-    requestAnimationFrame(update);
+    composer.render();
 }
 
 const coordinates = document.getElementById('coordinates');
@@ -1413,12 +1370,12 @@ function createLights() {
 }
 
 function createLightSources(offsetX, offsetZ){
-    if (!lightsEnabled) {
-        return;
-    }
-    //Số lượng PointLight
-    const lightStep = 2;
-    const lightRadius = 15; // chỉ tạo light trong bán kính 15 block quanh player
+    if (!lightsEnabled) return;
+    
+    const lightStep = 4; // Increase step size to reduce light count
+    const lightRadius = 10; // Reduce radius
+    // Use object pooling for lights
+    const lightPool = [];
     const playerPos = controls.getObject().position;
     for (var i = -tolerance; i < MAP_WIDTH + tolerance; i += lightStep) {
         for (var j = -tolerance; j < MAP_HEIGHT + tolerance; j += lightStep) {
@@ -1478,6 +1435,7 @@ document.addEventListener('keydown', function (event) {
                 if (intersects[i].distance < 2.0) {
                     if (doorObj.userData.animator) {
                         doorObj.userData.animator.toggle();
+                        audio.playSFX('door');
                         break;
                     }
                 }
@@ -1490,6 +1448,7 @@ document.addEventListener('keydown', function (event) {
                         if (doorObj.userData.animator && !doorObj.userData.animator.isOpen()) {
                             doorObj.userData.animator.open();
                             popupMessage("Cửa đã mở! Bạn có thể thoát ra!");
+                            audio.playSFX('enddoor');
                         }
                     } else {
                         popupMessage(`Chưa thể thoát! Bạn cần thu thập đủ ${glowstickTotal} glowstick (${glowstickCount}/${glowstickTotal})`);
@@ -1523,93 +1482,85 @@ for (let y = 0; y < MAP_HEIGHT; y++) {
         glowstick.userData.cellValue = cellValue;
         glowstickAnimators.push(animator);
         
-        // Tăng cường phát sáng cho glowstick
+        // Tối ưu vật liệu cho glowstick
         glowstick.traverse((child) => {
           if (child.isMesh && child.material) {
             child.material.color.set(glowstickColors[cellValue]);
             child.material.emissive = new THREE.Color(glowstickColors[cellValue]);
-            child.material.emissiveIntensity = 3.0; // Tăng độ phát sáng
+            child.material.emissiveIntensity = 1.5; // Giảm cường độ phát sáng
             child.material.needsUpdate = true;
           }
         });
 
-        // Điều chỉnh ánh sáng glowstick
-        const innerLight = new THREE.PointLight(
+        // Tối ưu ánh sáng cho glowstick
+        const glowLight = new THREE.PointLight(
           glowstickColors[cellValue],
-          5.0,  // Tăng cường độ lên 5.0
-          4,    // Tăng phạm vi lên 4
-          1.5   // Giảm độ suy giảm xuống 1.5
+          1.5,  // Giảm cường độ
+          3,    // Giảm phạm vi
+          2     // Tăng decay để giảm độ mờ
         );
-        innerLight.position.copy(glowstick.position);
-        innerLight.position.y += 0.2; // Nâng cao hơn một chút
-
-        const outerLight = new THREE.PointLight(
-          glowstickColors[cellValue],
-          2.0,  // Tăng cường độ lên 2.0
-          8,    // Tăng phạm vi lên 8
-          1.5   // Giảm độ suy giảm
-        );
-        outerLight.position.copy(glowstick.position);
-        outerLight.position.y += 0.2;
-
-        // Thêm bloom effect cho glowstick
-        // Tìm và điều chỉnh bloomPass settings
-        bloomPass.strength = 1.0;
-        bloomPass.radius = 0.5;
-        bloomPass.threshold = 0.3;
-        bloomPass.enabled = true;
-
-        // Điều chỉnh ambient light để tối hơn (làm nổi bật glowstick)
-        ambientLight.intensity = 0.05;
+        glowLight.position.copy(glowstick.position);
+        glowLight.position.y += 0.2;
+        scene.add(glowLight);
+        glowstick.userData.glowLight = glowLight;
+        glowstickLights.push(glowLight);
       });
     }
   }
 }
 
+// Tối ưu bloom effect - chỉ cần set một lần
+bloomPass.strength = 0.3; // Giảm độ mạnh
+bloomPass.radius = 0.2;   // Giảm bán kính
+bloomPass.threshold = 0.4; // Tăng ngưỡng
+bloomPass.enabled = true;
+
 //Logic nhặt glowstick: 
 function checkGlowstickCollision() {
-  const playerPosition = controls.getObject().position;
-  scene.children.forEach(function (object) {
-    if (object.userData && object.userData.isGlowstick) {
-      const dx = playerPosition.x - object.position.x;
-      const dz = playerPosition.z - object.position.z;
-      const dist2D = Math.sqrt(dx * dx + dz * dz);
-      if (dist2D < 0.5) {
-        scene.remove(object);
-        // Xóa cả hai nguồn sáng
-        if (object.userData.glowLight) {
-          scene.remove(object.userData.glowLight);
-          const lightIndex = glowstickLights.indexOf(object.userData.glowLight);
-          if (lightIndex > -1) glowstickLights.splice(lightIndex, 1);
-        }
-        if (object.userData.ambientGlow) {
-          scene.remove(object.userData.ambientGlow);
-          const glowIndex = glowstickLights.indexOf(object.userData.ambientGlow);
-          if (glowIndex > -1) glowstickLights.splice(glowIndex, 1);
-        }
-        glowstickCount++;
-        updateGlowstickCounter();
-        popupMessage('Đã nhặt được glowstick!');
-      }
+    const playerPosition = controls.getObject().position;
+    const objectsToRemove = [];
+    
+    try {
+        scene.children.forEach(function (object) {
+            if (object.userData && object.userData.isGlowstick) {
+                const dx = playerPosition.x - object.position.x;
+                const dz = playerPosition.z - object.position.z;
+                const dist2D = Math.sqrt(dx * dx + dz * dz);
+                
+                if (dist2D < 0.5) {
+                    objectsToRemove.push(object);
+                }
+            }
+        });
+        
+        objectsToRemove.forEach(object => {
+            // Xóa nguồn sáng trước
+            if (object.userData.glowLight) {
+                scene.remove(object.userData.glowLight);
+                const lightIndex = glowstickLights.indexOf(object.userData.glowLight);
+                if (lightIndex > -1) glowstickLights.splice(lightIndex, 1);
+            }
+            
+            // Sau đó xóa object
+            scene.remove(object);
+            glowstickCount++;
+            updateGlowstickCounter();
+            
+            // Đợi một frame trước khi hiện thông báo
+            requestAnimationFrame(() => {
+                popupMessage('Đã nhặt được glowstick!');
+                audio.playSFX('collect');
+            });
+        });
+    } catch (error) {
+        console.error("Error in glowstick collision check:", error);
     }
-  });
-}
-
-// Thêm gọi checkGlowstickCollision vào hàm update
-const oldUpdate = update;
-update = function() {
-  checkGlowstickCollision();
-  if (glowstickAnimators) {
-    glowstickAnimators.forEach(anim => anim && anim.update(clock.getDelta()));
-  }
-  oldUpdate();
 }
 
 // Thêm hàm xử lý chiến thắng
 function handleGameWin() {
     // Hiển thị thông báo chiến thắng
     popupMessage("Chúc mừng! Bạn đã thoát khỏi Backrooms!");
-    
     // Tạm dừng game
     paused = true;
     
@@ -1633,8 +1584,8 @@ function handleGameWin() {
         bloomPass.strength = 1.5;
         bloomPass.radius = 0.9;
     }
-    // Thêm âm thanh chiến thắng (nếu có)
-    // TODO: Thêm âm thanh chiến thắng
+    audio.playSFX('finish');
+    audio.stopMusic();
 }
 
 // Thêm vào phần đầu file, sau các import
@@ -1697,7 +1648,7 @@ function drawMinimap() {
                 case 7: // Glowstick vàng
                     ctx.fillStyle = '#ff0';
                     break;
-                case 9: // Cửa thoát
+                case 10: // Cửa thoát
                     ctx.fillStyle = '#0ff';
                     break;
                 default: // Không gian trống
@@ -1716,6 +1667,16 @@ function drawMinimap() {
     ctx.beginPath();
     ctx.arc(playerX, playerY, 2, 0, Math.PI * 2);
     ctx.fill();
+
+    // Vẽ vị trí SCP-096
+    if (scp096) {
+        const scpX = ((scp096.position.x + MAP_WIDTH/2) * cellSize) / minimapScale;
+        const scpY = ((scp096.position.z + MAP_HEIGHT/2) * cellSize) / minimapScale;
+        ctx.fillStyle = '#f00';
+        ctx.beginPath();
+        ctx.arc(scpX, scpY, 2, 0, Math.PI * 2);
+        ctx.fill();
+    }
 }
 
 // Thêm vào event listener keydown
@@ -1737,3 +1698,361 @@ document.addEventListener('keydown', function(event) {
         }
     }
 });
+
+//QUÁI VẬT SCP-096
+
+let scp096, scpAnimator, scpMixer;
+// Tìm vị trí spawn cho SCP-096 (số 11)
+let scpSpawn = null;
+for (let y = 0; y < MAP_HEIGHT; y++) {
+  for (let x = 0; x < MAP_WIDTH; x++) {
+    if (getCellValue(x, y) === 11) {
+      scpSpawn = { x: x - MAP_WIDTH / 2, y: 0, z: y - MAP_HEIGHT / 2 };
+    }
+  }
+}
+if (scpSpawn) {
+  loadSCP096(scene, scpSpawn, (model, mixer, animator) => {
+    scp096 = model;
+    scpMixer = mixer;
+    scpAnimator = animator;
+  });
+}
+
+//Tốc độ
+let scpSpeed = 1;
+let scpRunSpeed = 3;
+let scpScreamTimer = 5;
+
+//Đường đi
+let scpDirection = 1; // 1: đi tới (số tăng), -1: đi lui (số giảm)
+let scpCurrentNumber = 23; // Số hiện tại đang đi
+let scpMaxNumber = 184; // Số lớn nhất trên đường đi
+let scpPathPoints = []; // Mảng lưu các điểm đường đi
+let scpLastSeenPlayer = null; // Vị trí cuối cùng thấy người chơi
+
+// Hàm tìm đường đi từ map
+function findPathPoints() {
+  let points = [];
+  let maxNumber = 23;
+  for (let y = 0; y < MAP_HEIGHT; y++) {
+    for (let x = 0; x < MAP_WIDTH; x++) {
+      let value = getCellValue(x, y);
+      if (value >= 23 && value <= 184) {
+        points.push({
+          x: x - MAP_WIDTH / 2, // trục x thế giới
+          z: y - MAP_HEIGHT / 2, // trục z thế giới
+          number: value
+        });
+        maxNumber = Math.max(maxNumber, value);
+      }
+    }
+  }
+
+  // Kiểm tra xem có đủ các số không
+  let expectedCount = 184 - 23 + 1;
+  if (points.length !== expectedCount) {
+    console.warn(`Thiếu một số điểm đường đi. Cần ${expectedCount} điểm, nhưng chỉ tìm thấy ${points.length} điểm`);
+  }
+  points.sort((a, b) => a.number - b.number);
+  scpMaxNumber = maxNumber;
+  return points;
+}
+
+// Thêm biến theo dõi trạng thái tấn công
+let isAttacking = false;
+let attackStartTime = 0;
+let deathScreen = null;
+
+// Thêm hàm tạo màn hình đỏ khi chết
+function createDeathScreen() {
+  const overlay = document.createElement('div');
+  overlay.style.position = 'fixed';
+  overlay.style.top = '0';
+  overlay.style.left = '0';
+  overlay.style.width = '100%';
+  overlay.style.height = '100%';
+  overlay.style.backgroundColor = 'rgba(255, 0, 0, 0.5)';
+  overlay.style.zIndex = '1000';
+  overlay.style.opacity = '0';
+  overlay.style.transition = 'opacity 1s';
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function updateSCP096(delta) {
+  if (!scp096 || !scpAnimator || paused) return;
+  
+  let playerPos = controls.getObject().position;
+  let scpPos = scp096.position;
+  let isPlayerCrouching = keyState.KeyC;
+  let distToPlayer = playerPos.distanceTo(scpPos);
+  const maxHearDistIdle = 12; // Khoảng cách tối đa nghe được idle SCP
+  const maxHearDistScream = 30; // Khoảng cách tối đa nghe được scream SCP
+  let scpIdleVolume = 0;
+  let scpScreamVolume = 0;
+  if (distToPlayer < maxHearDistIdle) {
+    scpIdleVolume = audio.sfxVolume * (1 - distToPlayer / maxHearDistIdle);
+  }
+  if (distToPlayer < maxHearDistScream) {
+    scpScreamVolume = audio.sfxVolume * (1 - distToPlayer / maxHearDistScream);
+  }
+
+  // Xử lý âm thanh quái vật
+  if (distToPlayer < 30) { // Khoảng cách tối đa nghe được âm thanh quái vật
+    if (!audio.scpSoundEnabled) {
+      audio.playSCPSound();
+    }
+    audio.updateSCPSoundVolume(distToPlayer);
+  } else {
+    if (audio.scpSoundEnabled) {
+      audio.stopSCPSound();
+    }
+  }
+
+  // Nếu spectator thì bất tử
+  if (spectatorMode) return;
+
+  // Nếu đang trong trạng thái tấn công
+  if (isAttacking) {
+    const attackDuration = 0.6; // Thời gian tấn công (giây)
+    const currentTime = performance.now() / 1000;
+    
+    if (currentTime - attackStartTime < attackDuration) {
+      // Khóa camera vào SCP-096
+      const lookAtPos = new THREE.Vector3(scpPos.x, scpPos.y + 0.5, scpPos.z);
+      controls.getObject().lookAt(lookAtPos);
+      
+      // Giữ SCP-096 ở vị trí gần hơn với người chơi
+      const dir = new THREE.Vector3(playerPos.x - scpPos.x, 0, playerPos.z - scpPos.z).normalize();
+      scp096.position.copy(playerPos.clone().sub(dir.multiplyScalar(0.7)));
+      scp096.position.y = 0;
+      
+      // Xoay SCP-096 hướng về phía người chơi
+      scp096.lookAt(playerPos);
+      
+      // Phát animation tấn công
+      scpAnimator.playAnimation(SCP096_ANIMATION_STATES.ATTACK2);
+      if (scpScreamVolume > 0.01) audio.playSFX('attackscp', scpScreamVolume);
+    } else {
+      // Kết thúc tấn công
+      isAttacking = false;
+      if (!spectatorMode) {
+        handleGameOver();
+      }
+    }
+    scpAnimator.update(delta);
+    return;
+  }
+
+  // Nếu thấy player (không crouch, trong tầm nhìn)
+  if (!isPlayerCrouching && distToPlayer < 8) {
+    // Lưu vị trí cuối cùng thấy player
+    scpLastSeenPlayer = playerPos.clone();
+    
+    // Đuổi theo player
+    let dir = new THREE.Vector3(playerPos.x - scpPos.x, 0, playerPos.z - scpPos.z);
+    dir.normalize();
+    
+    // Kiểm tra va chạm trước khi di chuyển
+    let nextPos = scpPos.clone().add(dir.clone().multiplyScalar(scpRunSpeed * delta));
+    let canMove = true;
+    
+    // Kiểm tra va chạm với tường và cột
+    scene.children.forEach(function (object) {
+      if (object.userData && (object.userData.cellType === 'wall' || object.userData.cellType === 'column')) {
+        if (checkCollision(nextPos, object)) {
+          canMove = false;
+        }
+      }
+    });
+    
+    if (canMove) {
+      scp096.position.x += dir.x * scpRunSpeed * delta;
+      scp096.position.z += dir.z * scpRunSpeed * delta;
+      
+      // Xoay quái vật theo hướng di chuyển
+      let angle = Math.atan2(dir.x, dir.z);
+      scp096.rotation.y = angle;
+      scpAnimator.playAnimation(SCP096_ANIMATION_STATES.RUN);
+      const now = performance.now();
+    } else {
+      // Nếu không thể di chuyển, thử tìm đường đi khác
+      let alternativeDir = new THREE.Vector3();
+      let foundPath = false;
+      
+      // Thử các hướng khác nhau
+      const angles = [Math.PI/4, -Math.PI/4, Math.PI/2, -Math.PI/2];
+      for (let angle of angles) {
+        alternativeDir.copy(dir).applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+        nextPos = scpPos.clone().add(alternativeDir.clone().multiplyScalar(scpRunSpeed * delta));
+        canMove = true;
+        
+        scene.children.forEach(function (object) {
+          if (object.userData && (object.userData.cellType === 'wall' || object.userData.cellType === 'column')) {
+            if (checkCollision(nextPos, object)) {
+              canMove = false;
+            }
+          }
+        });
+        
+        if (canMove) {
+          scp096.position.x += alternativeDir.x * scpRunSpeed * delta;
+          scp096.position.z += alternativeDir.z * scpRunSpeed * delta;
+          
+          // Xoay quái vật theo hướng di chuyển mới
+          let newAngle = Math.atan2(alternativeDir.x, alternativeDir.z);
+          scp096.rotation.y = newAngle;
+          scpAnimator.playAnimation(SCP096_ANIMATION_STATES.RUN);
+          foundPath = true;
+          break;
+        }
+      }
+      
+      // Nếu không tìm được đường đi, chuyển sang trạng thái idle
+      if (!foundPath) {
+        scpAnimator.playAnimation(SCP096_ANIMATION_STATES.IDLE1);
+        if (scpIdleVolume > 0.01) audio.playSFX('idlescp', scpIdleVolume);
+      }
+    }
+    
+    // Bắt đầu tấn công khi đến đủ gần
+    if (distToPlayer < 1.5) {
+      isAttacking = true;
+      attackStartTime = performance.now() / 1000;
+      
+      // Tạo màn hình đỏ nếu chưa có
+      if (!deathScreen) {
+        deathScreen = createDeathScreen();
+      }
+    }
+    scpAnimator.update(delta);
+    return;
+  }
+
+  // Khởi tạo đường đi
+  if (scpPathPoints.length === 0) {
+    scpPathPoints = findPathPoints();
+  }
+
+  // Tìm điểm tiếp theo
+  let nextNumber = scpCurrentNumber + scpDirection;
+  // Kiểm tra nếu đã đến số lớn nhất hoặc nhỏ nhất
+  if (nextNumber > scpMaxNumber) {
+    scpDirection = -1;
+    nextNumber = scpCurrentNumber - 1;
+  } else if (nextNumber < 23) {
+    scpDirection = 1;
+    nextNumber = scpCurrentNumber + 1;
+  }
+  let nextPoint = scpPathPoints.find(p => p.number === nextNumber);
+  // Nếu không tìm thấy điểm tiếp theo, tìm điểm gần nhất
+  if (!nextPoint && scpLastSeenPlayer) {
+    let minDist = Infinity;
+    let nearestPoint = null;
+    scpPathPoints.forEach(point => {
+      let dist = new THREE.Vector3(point.x - scpLastSeenPlayer.x, 0, point.z - scpLastSeenPlayer.z).length();
+      if (dist < minDist) {
+        minDist = dist;
+        nearestPoint = point;
+      }
+    });
+    if (nearestPoint) {
+      nextPoint = nearestPoint;
+      scpCurrentNumber = nearestPoint.number;
+    }
+  }
+
+  // Kiểm tra xem có cần phát animation idle hoặc scream không
+  if (scpAnimator.isCurrentAnimationComplete()) {
+    if (nextPoint) {
+      // Tính hướng di chuyển
+      let targetX = nextPoint.x;
+      let targetZ = nextPoint.z;
+      let dir = new THREE.Vector3(targetX - scpPos.x, 0, targetZ - scpPos.z);
+      let dist = dir.length();
+      
+      // Bỏ qua va chạm khi quái vật đang quay về đường đi có sẵn
+      if (dist < 0.5) { // tăng ngưỡng để dễ bắt điểm hơn
+        scpCurrentNumber = nextNumber;
+        // Random phát animation idle hoặc scream 
+        if (Math.random() < 0.05) {  
+          scpAnimator.playAnimation(SCP096_ANIMATION_STATES.SCREAM);
+          if (scpScreamVolume > 0.01) audio.playSFX('screamscp', scpScreamVolume);
+        } else if (Math.random() < 0.05) { 
+          scpAnimator.playAnimation(Math.random() < 0.5 ? SCP096_ANIMATION_STATES.IDLE1 : SCP096_ANIMATION_STATES.IDLE2);
+        } else {
+          // Nếu không phát idle/scream thì di chuyển tiếp
+          dir.normalize();
+          scp096.position.x += dir.x * scpSpeed * delta;
+          scp096.position.z += dir.z * scpSpeed * delta;
+          // Xoay quái vật theo hướng di chuyển
+          let angle = Math.atan2(dir.x, dir.z);
+          scp096.rotation.y = angle;
+          scpAnimator.playAnimation(SCP096_ANIMATION_STATES.WALK);
+        }
+      } else {
+        // Di chuyển trực tiếp đến điểm tiếp theo mà không kiểm tra va chạm
+        dir.normalize();
+        scp096.position.x += dir.x * scpSpeed * delta;
+        scp096.position.z += dir.z * scpSpeed * delta;
+        // Xoay quái vật theo hướng di chuyển
+        let angle = Math.atan2(dir.x, dir.z);
+        scp096.rotation.y = angle;
+        scpAnimator.playAnimation(SCP096_ANIMATION_STATES.WALK);
+      }
+    } else {
+      scpAnimator.playAnimation(SCP096_ANIMATION_STATES.IDLE1);
+      if (scpIdleVolume > 0.01) audio.playSFX('idlescp', scpIdleVolume);
+    }
+  } else {
+    // Nếu đang trong animation idle hoặc scream, không di chuyển
+    // Nhưng vẫn update animator
+    scpAnimator.update(delta);
+  }
+
+  scpScreamTimer += delta;
+  if (scpScreamTimer > 20 && Math.random() < 0.05 && scpAnimator.isCurrentAnimationComplete()) { // Tăng thời gian từ 10 lên 20 và giảm xác suất từ 0.1 xuống 0.05
+    scpAnimator.playAnimation(SCP096_ANIMATION_STATES.SCREAM);
+    scpScreamTimer = 0;
+  }
+  scpAnimator.update(delta);
+}
+
+// Thêm hàm xử lý thua game
+function handleGameOver() {
+    paused = true;
+    
+    // Hiển thị màn hình đỏ
+    if (deathScreen) {
+        deathScreen.style.opacity = '1';
+    }
+    
+    popupMessage('Bạn đã chết!');
+    const title = document.getElementById('title');
+    if (title) {
+        title.innerText = 'Bạn đã chết!';
+        title.style.display = 'block';
+    }
+    startButton.style.display = 'none';
+    const loading = document.querySelector('#menuPanel [id*="loading"], #menuPanel .loading, #menuPanel [class*="loading"]');
+    if (loading) loading.style.display = 'none';
+    menuPanel.style.display = 'block';
+    audio.playSFX('gameover');
+    audio.playSFX('pain'); // Phát SFX đau khi chết
+}
+
+// Thêm vào phần đầu file, sau các import
+const SHADER_UPDATE_INTERVAL = 1/30; // 30 times per second
+let shaderUpdateAccumulator = 0;
+
+function updateShaders(delta) {
+    shaderUpdateAccumulator += delta;
+    if (shaderUpdateAccumulator > SHADER_UPDATE_INTERVAL) {
+        shaderTime += shaderUpdateAccumulator;
+        if (staticPass.enabled) staticPass.uniforms.time.value = shaderTime / 10;
+        if (filmPass.enabled) filmPass.uniforms.time.value = shaderTime;
+        if (BadTVShaderPass.enabled) BadTVShaderPass.uniforms.time.value = shaderTime;
+        shaderUpdateAccumulator = 0;
+    }
+}

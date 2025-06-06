@@ -89,7 +89,7 @@ Game 3D kinh dị sinh tồn lấy cảm hứng từ Backrooms, phát triển b�
 ## Credits
 - Monster Model: https://sketchfab.com/3d-models/scp-096-7074212c3ba54d0d959c48c55b8fefce
 - Player Model: https://sketchfab.com/3d-models/etb-animated-use-animation-dropdown-to-see-all-6795caee22124716bab954326306d3e3
-- Door Model: https://sketchfab.com/3d-models/door-wood-afed9756ba974d1395a336124ff326fd#download
+- Door Model: https://sketchfab.com/3d-models/lowpoly-animated-doors-blender-file-58a65be7345348ada5f7f02374fdbefb
 - End Door Model: https://sketchfab.com/3d-models/garage-door-01-fb7a0e3b6cf348f48831a80e49054609
 - GlowStick Model: https://sketchfab.com/3d-models/glowstick-cbc7f31c658247219c32b083183513e5#download
 

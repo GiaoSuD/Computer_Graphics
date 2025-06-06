@@ -31,7 +31,7 @@ export class PlayerAnimator {
       // Chỉ map các animation thuộc armature chính
       if (!clip.name.startsWith('Armature|Armature')) return;
       const action = this.mixer.clipAction(clip);      // Map tên hoạt ảnh đến trạng thái
-      action.timeScale = 0.5;
+      //action.timeScale = 20;
       if (clip.name.includes('Armature.001')) {
         this.actions[ANIMATION_STATES.CROUCH_WALKING] = action;
       } else if (clip.name.includes('Armature.002')) {
@@ -63,7 +63,7 @@ export class PlayerAnimator {
     newAction.play();
     this.currentAction = newAction;
     this.currentState = stateName;
-    console.log('Switched animation to:', stateName);
+    //console.log('Player: Switched animation to:', stateName);
   }
   
   update(deltaTime) {
